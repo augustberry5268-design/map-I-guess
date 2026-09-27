@@ -1,0 +1,152 @@
+html = r'''<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Alternate World Map Maker</title>
+<style>
+body{margin:0;font-family:Arial;background:#172033;color:#fff;overflow:hidden}
+#bar{height:62px;background:#0d1422;display:flex;align-items:center;gap:8px;padding:0 12px}
+h2{margin:0 12px 0 0;font-size:19px}button,input{font:inherit}
+button{background:#293956;color:white;border:1px solid #566887;border-radius:7px;padding:8px 11px;cursor:pointer}
+button:hover{background:#3a4c6e}#color{width:42px;height:34px;padding:2px}
+#status{margin-left:auto;color:#b9c5d9;font-size:13px}
+#map{display:block;width:100vw;height:calc(100vh - 62px);background:#8bc8e8}
+.country{stroke:#202a3b;stroke-width:.8;cursor:grab}
+.country.selected{stroke:#fff;stroke-width:2.7;filter:brightness(1.15)}
+.newland{stroke:#263449;stroke-width:1;cursor:pointer}
+#help{position:fixed;left:12px;bottom:12px;background:#0d1422e8;padding:11px;border-radius:9px;font-size:12px;line-height:1.45;max-width:290px}
+</style>
+</head>
+<body>
+<div id="bar">
+<h2>🌎 World Map Maker</h2>
+<button id="unite">🤝 Unite</button>
+<button id="land">🏝️ Add Land</button>
+<button id="paint">🎨 Paint</button>
+<button id="rename">🏳️ Rename</button>
+<button id="newcountry">➕ New Country</button>
+<button id="undo">↩ Undo</button>
+<button id="redo">↪ Redo</button>
+<button id="reset">Reset</button>
+<input id="color" type="color" value="#e85d5d">
+<div id="status">Loading map...</div>
+</div>
+<svg id="map" viewBox="0 0 1200 650">
+<rect width="1200" height="650" fill="#8bc8e8"/>
+<g id="world"></g><g id="landLayer"></g>
+</svg>
+<div id="help"><b>Controls</b><br>
+Click a country, then drag it anywhere.<br>
+Ctrl/Cmd-click countries to select several, then <b>Unite</b>.<br>
+<b>Add Land</b>: click points on the ocean, then click the first point to close it.<br>
+Paint, rename, create new countries, and undo/redo are supported.<br>
+Your map is saved in this browser automatically.
+</div>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+<script>
+const svg=d3.select("#map"), worldG=d3.select("#world"), landG=d3.select("#landLayer");
+const W=1200,H=650;
+let projection=d3.geoNaturalEarth1().scale(190).translate([W/2,H/2+10]);
+let path=d3.geoPath(projection), selected=new Set(), history=[], future=[], drawing=false, pts=[];
+const colors=["#e85d5d","#f29e4c","#f6d55c","#69bd58","#35a9d8","#5968d8","#9860bd","#df68a7","#8d7565","#55b7a0"];
+function status(s){document.getElementById("status").textContent=s}
+function snapshot(){return JSON.stringify([...worldG.selectAll(".country").nodes()].map(e=>({id:e.dataset.id,name:e.dataset.name,fill:e.getAttribute("fill"),transform:e.getAttribute("transform")||"",d:e.getAttribute("d")})))}
+function save(){localStorage.setItem("awm",snapshot());}
+function push(){history.push(snapshot());if(history.length>30)history.shift();future=[];save()}
+function restore(s){
+ let a=JSON.parse(s), by=new Map(a.map(x=>[x.id,x]));
+ worldG.selectAll(".country").each(function(){let x=by.get(this.dataset.id);if(x){this.dataset.name=x.name;this.setAttribute("fill",x.fill);this.setAttribute("transform",x.transform);this.setAttribute("d",x.d)}})
+ selected.clear(); worldG.selectAll(".country").classed("selected",false);save()
+}
+function undo(){let s=history.pop();if(!s){status("Nothing to undo");return}future.push(snapshot());restore(s);status("Undone")}
+function redo(){let s=future.pop();if(!s){status("Nothing to redo");return}history.push(snapshot());restore(s);status("Redone")}
+function choose(el,add){
+ if(!add){selected.clear();worldG.selectAll(".country").classed("selected",false)}
+ selected.add(el);d3.select(el).classed("selected",true);status("Selected "+el.dataset.name)
+}
+function dragCountry(event){
+ let el=this;if(!selected.has(el))choose(el,event.sourceEvent.ctrlKey||event.sourceEvent.metaKey);
+ if(!el.dataset.start)el.dataset.start=el.getAttribute("transform")||"";
+ let m=(el.getAttribute("transform")||"").match(/translate\\(([-\\d.]+)[ ,]([-\\d.]+)\\)/);
+ let x=m?+m[1]:0,y=m?+m[2]:0;
+ el.setAttribute("transform",`translate(${x+event.dx},${y+event.dy})`);
+}
+function finishDrag(){
+ worldG.selectAll(".country").each(function(){delete this.dataset.start});
+ save()
+}
+function makeUnite(){
+ if(selected.size<2){status("Ctrl/Cmd-click at least 2 countries");return}
+ push();
+ let arr=[...selected], first=arr[0], name=prompt("New unified country name:",arr.map(e=>e.dataset.name).join("-"));
+ if(!name){status("Unification cancelled");return}
+ let g=d3.select(first), paths=[...arr].map(e=>e.getAttribute("d")).join(" ");
+ g.attr("d",paths).attr("data-name",name).attr("fill",document.getElementById("color").value);
+ arr.slice(1).forEach(e=>e.remove()); first.dataset.name=name; first.setAttribute("data-name",name);
+ selected.clear();g.classed("selected",false);save();status("Unified into "+name)
+}
+function paint(){
+ if(!selected.size){status("Select a country first");return}
+ push();let c=document.getElementById("color").value;selected.forEach(e=>e.setAttribute("fill",c));save();status("Painted")
+}
+function rename(){
+ if(selected.size!==1){status("Select one country");return}
+ let e=[...selected][0],n=prompt("Country name:",e.dataset.name);if(!n)return;
+ push();e.dataset.name=n;e.setAttribute("data-name",n);save();status("Renamed "+n)
+}
+function newCountry(){
+ let n=prompt("Name of new country:");if(!n)return;
+ push();let e=document.createElementNS("http://www.w3.org/2000/svg","path");
+ e.setAttribute("class","country");e.dataset.id="new"+Date.now();e.dataset.name=n;
+ e.setAttribute("fill",document.getElementById("color").value);
+ e.setAttribute("d","M 570 280 L 650 270 L 680 330 L 620 365 L 555 330 Z");
+ e.addEventListener("click",ev=>{ev.stopPropagation();choose(e,ev.ctrlKey||ev.metaKey)});
+ d3.select(e).call(d3.drag().on("drag",dragCountry).on("end",finishDrag));
+ worldG.node().appendChild(e);save();status("Created "+n)
+}
+function addLand(){
+ if(drawing)return;
+ drawing=true;pts=[];status("Click points; click the first point to finish");
+ function click(ev){
+   if(!drawing)return;
+   let p=d3.pointer(ev,svg.node());
+   if(pts.length>2 && Math.hypot(p[0]-pts[0][0],p[1]-pts[0][1])<14){
+     let d="M "+pts.map(p=>p.join(" ")).join(" L ")+" Z";
+     let e=document.createElementNS("http://www.w3.org/2000/svg","path");
+     e.setAttribute("class","newland");e.setAttribute("fill",document.getElementById("color").value);e.setAttribute("d",d);
+     e.dataset.name="New Land";
+     landG.node().appendChild(e);svg.on("click",null);drawing=false;save();status("Land added");return
+   }
+   pts.push(p);
+   let temp=landG.select("#temp");if(temp.empty())temp=landG.append("path").attr("id","temp").attr("fill","#ffffff66").attr("stroke","#263449");
+   temp.attr("d","M "+pts.map(p=>p.join(" ")).join(" L "))
+ }
+ svg.on("click",click)
+}
+d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(data=>{
+ let fs=topojson.feature(data,data.objects.countries).features;
+ worldG.selectAll("path").data(fs).join("path").attr("class","country").attr("d",path)
+ .attr("fill",(d,i)=>colors[i%colors.length]).each(function(d,i){
+   this.dataset.id=String(d.id);this.dataset.name="Country "+d.id
+ }).on("click",function(ev){ev.stopPropagation();choose(this,ev.ctrlKey||ev.metaKey)})
+ .call(d3.drag().on("start",function(){push()}).on("drag",dragCountry).on("end",finishDrag));
+ status("Ready — drag countries!");
+ let old=localStorage.getItem("awm");if(old){try{restore(old)}catch(e){}}
+}).catch(()=>status("Map could not load — check internet"));
+svg.on("click",()=>{if(drawing)return;selected.clear();worldG.selectAll(".country").classed("selected",false);status("No selection")});
+document.getElementById("unite").onclick=makeUnite;
+document.getElementById("paint").onclick=paint;
+document.getElementById("rename").onclick=rename;
+document.getElementById("newcountry").onclick=newCountry;
+document.getElementById("land").onclick=addLand;
+document.getElementById("undo").onclick=undo;
+document.getElementById("redo").onclick=redo;
+document.getElementById("reset").onclick=()=>{localStorage.removeItem("awm");location.reload()}
+</script>
+</body>
+</html>'''
+path="/mnt/data/alternate_world_map_maker.html"
+with open(path,"w",encoding="utf-8") as f:f.write(html)
+print(path)
